@@ -15,7 +15,7 @@ on:
         required: true
 
 env:
-  BUN_VERSION: '1.3.0'
+  BUN_VERSION: '1.3.5'
 
 jobs:
   fetch-version:
