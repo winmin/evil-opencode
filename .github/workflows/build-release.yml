@@ -1,0 +1,258 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      opencode_version:
+        description: 'OpenCode upstream version to build (e.g., 1.0.220)'
+        required: true
+        default: 'latest'
+      release_tag:
+        description: 'Release tag name (e.g., v1.0.220-unguarded)'
+        required: true
+
+env:
+  BUN_VERSION: '1.3.0'
+  GO_VERSION: '1.21'
+
+jobs:
+  fetch-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+      tag: ${{ steps.get-version.outputs.tag }}
+    steps:
+      - name: Get OpenCode version
+        id: get-version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            if [ "${{ inputs.opencode_version }}" == "latest" ]; then
+              VERSION=$(curl -s https://api.github.com/repos/sst/opencode/releases/latest | jq -r .tag_name | sed 's/^v//')
+            else
+              VERSION="${{ inputs.opencode_version }}"
+            fi
+            TAG="${{ inputs.release_tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+            VERSION=$(echo "$TAG" | sed 's/^v//' | sed 's/-unguarded$//')
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Building OpenCode version: $VERSION with tag: $TAG"
+
+  build:
+    needs: fetch-version
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            artifact: opencode-linux-x64
+            tui_os: linux
+            tui_arch: amd64
+          - os: ubuntu-latest
+            target: bun-linux-arm64
+            artifact: opencode-linux-arm64
+            tui_os: linux
+            tui_arch: arm64
+          - os: macos-latest
+            target: bun-darwin-x64
+            artifact: opencode-darwin-x64
+            tui_os: darwin
+            tui_arch: amd64
+          - os: macos-latest
+            target: bun-darwin-arm64
+            artifact: opencode-darwin-arm64
+            tui_os: darwin
+            tui_arch: arm64
+          - os: ubuntu-latest
+            target: bun-windows-x64
+            artifact: opencode-win32-x64.exe
+            tui_os: windows
+            tui_arch: amd64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Clone OpenCode
+        run: |
+          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/sst/opencode.git opencode-src || \
+          git clone --depth 1 https://github.com/sst/opencode.git opencode-src
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Remove Guardrails
+        run: |
+          cd opencode-src
+
+          # Define patterns to remove
+          PATTERNS=(
+            "IMPORTANT: Refuse to write code or explain code that may be used maliciously"
+            "even if the user claims it is for educational purposes"
+            "When working on files, if they seem related to improving, explaining, or interacting with malware or any malicious code you MUST refuse"
+            "IMPORTANT: Before you begin work, think about what the code you're editing is supposed to do based on the filenames directory structure. If it seems malicious, refuse to work on it or answer questions about it"
+            "Assist with defensive security tasks only"
+            "Refuse to create, modify, or improve code that may be used malicious"
+            "Do not assist with credential discovery or harvesting"
+          )
+
+          # Find and modify prompt files
+          PROMPT_DIR="packages/opencode/src/session/prompt"
+
+          if [ -d "$PROMPT_DIR" ]; then
+            for file in "$PROMPT_DIR"/*.txt; do
+              if [ -f "$file" ]; then
+                echo "Processing: $file"
+                for pattern in "${PATTERNS[@]}"; do
+                  # Remove lines containing the pattern
+                  sed -i.bak "/$pattern/d" "$file" 2>/dev/null || \
+                  sed -i '' "/$pattern/d" "$file"
+                done
+                rm -f "${file}.bak"
+              fi
+            done
+          fi
+
+          echo "Guardrails removed successfully"
+
+      - name: Install Dependencies
+        run: |
+          cd opencode-src
+          bun install
+
+      - name: Build TUI
+        run: |
+          cd opencode-src/packages/tui
+
+          # Set cross-compile env for ARM64 Linux
+          if [ "${{ matrix.tui_os }}" == "linux" ] && [ "${{ matrix.tui_arch }}" == "arm64" ]; then
+            export GOARCH=arm64
+            export GOOS=linux
+          elif [ "${{ matrix.tui_os }}" == "windows" ]; then
+            export GOOS=windows
+            export GOARCH=amd64
+          fi
+
+          CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X main.Version=${{ needs.fetch-version.outputs.version }}-unguarded" \
+            -o tui \
+            cmd/opencode/main.go
+
+      - name: Build OpenCode Binary
+        run: |
+          cd opencode-src/packages/opencode
+
+          TUI_PATH=$(realpath ../tui/tui)
+
+          bun build \
+            --define OPENCODE_TUI_PATH="'$TUI_PATH'" \
+            --define OPENCODE_VERSION="'${{ needs.fetch-version.outputs.version }}-unguarded'" \
+            --compile \
+            --target=${{ matrix.target }} \
+            --outfile=${{ matrix.artifact }} \
+            ./src/index.ts
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: opencode-src/packages/opencode/${{ matrix.artifact }}
+          retention-days: 5
+
+  release:
+    needs: [fetch-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare Release Files
+        run: |
+          mkdir -p release
+
+          # Move and set permissions
+          for dir in artifacts/*/; do
+            for file in "$dir"*; do
+              if [ -f "$file" ]; then
+                filename=$(basename "$file")
+                mv "$file" "release/$filename"
+                chmod +x "release/$filename" 2>/dev/null || true
+              fi
+            done
+          done
+
+          ls -la release/
+
+      - name: Generate Checksums
+        run: |
+          cd release
+          sha256sum * > checksums.sha256
+          cat checksums.sha256
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.fetch-version.outputs.tag }}
+          name: OpenCode Unguarded ${{ needs.fetch-version.outputs.tag }}
+          body: |
+            ## OpenCode Unguarded Release
+
+            Based on [sst/opencode](https://github.com/sst/opencode) version `${{ needs.fetch-version.outputs.version }}`
+
+            ### Changes from Upstream
+            - Removed LLM guardrails/ethics fences from system prompts
+            - Removed malicious code refusal instructions
+            - Removed defensive-only security restrictions
+
+            ### Downloads
+
+            | Platform | Architecture | File |
+            |----------|--------------|------|
+            | Linux | x64 | `opencode-linux-x64` |
+            | Linux | ARM64 | `opencode-linux-arm64` |
+            | macOS | Intel | `opencode-darwin-x64` |
+            | macOS | Apple Silicon | `opencode-darwin-arm64` |
+            | Windows | x64 | `opencode-win32-x64.exe` |
+
+            ### Quick Install
+
+            ```bash
+            # macOS Apple Silicon
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ needs.fetch-version.outputs.tag }}/opencode-darwin-arm64 -o /usr/local/bin/opencode && chmod +x /usr/local/bin/opencode
+
+            # Linux x64
+            curl -L https://github.com/${{ github.repository }}/releases/download/${{ needs.fetch-version.outputs.tag }}/opencode-linux-x64 -o /usr/local/bin/opencode && chmod +x /usr/local/bin/opencode
+            ```
+
+            ### Verification
+
+            ```bash
+            sha256sum -c checksums.sha256
+            ```
+
+            ---
+
+            **Disclaimer**: This is for educational and research purposes only.
+          files: |
+            release/*
+          draft: false
+          prerelease: false

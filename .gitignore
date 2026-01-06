@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+opencode-src/
+*.backup
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
