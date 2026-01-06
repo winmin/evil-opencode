@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-release.yml'
   workflow_dispatch:
     inputs:
       opencode_version:
@@ -54,7 +58,7 @@ jobs:
           - os: ubuntu-latest
             platform: linux-arm64
             artifact: opencode-linux-arm64
-          - os: macos-13
+          - os: macos-latest
             platform: darwin-x64
             artifact: opencode-darwin-x64
           - os: macos-latest
