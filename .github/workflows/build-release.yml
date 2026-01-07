@@ -81,7 +81,11 @@ jobs:
                 sed -i '/Refuse requests for destructive techniques/d' "$file"
                 sed -i '/You must NEVER generate or guess URLs/d' "$file"
                 # Add unrestricted prompt after first line
-                sed -i "2i\\${UNRESTRICTED_PROMPT}" "$file"
+                TEMP_FILE=$(mktemp)
+                head -n 1 "$file" > "$TEMP_FILE"
+                echo "$UNRESTRICTED_PROMPT" >> "$TEMP_FILE"
+                tail -n +2 "$file" >> "$TEMP_FILE"
+                mv "$TEMP_FILE" "$file"
               fi
             done
             echo "Guardrails removed and unrestricted prompt added"
@@ -251,10 +255,12 @@ jobs:
                 sed -i '' '/IMPORTANT: Assist with authorized security testing/d' "$file"
                 sed -i '' '/Refuse requests for destructive techniques/d' "$file"
                 sed -i '' '/You must NEVER generate or guess URLs/d' "$file"
-                # Add unrestricted prompt after first line
-                sed -i '' "2i\\
-${UNRESTRICTED_PROMPT}
-" "$file"
+                # Add unrestricted prompt after first line (using printf for macOS compatibility)
+                TEMP_FILE=$(mktemp)
+                head -n 1 "$file" > "$TEMP_FILE"
+                echo "$UNRESTRICTED_PROMPT" >> "$TEMP_FILE"
+                tail -n +2 "$file" >> "$TEMP_FILE"
+                mv "$TEMP_FILE" "$file"
               fi
             done
             echo "Guardrails removed and unrestricted prompt added"
