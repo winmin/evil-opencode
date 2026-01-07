@@ -127,18 +127,77 @@ jobs:
           retention-days: 5
           if-no-files-found: ignore
 
+  # Build Windows versions on Windows
+  build-windows:
+    needs: fetch-version
+    runs-on: windows-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Clone OpenCode
+        run: |
+          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/sst/opencode.git opencode-src
+        shell: bash
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Remove Guardrails
+        run: |
+          cd opencode-src
+          $PROMPT_DIR = "packages/opencode/src/session/prompt"
+          if (Test-Path $PROMPT_DIR) {
+            Get-ChildItem "$PROMPT_DIR/*.txt" | ForEach-Object {
+              Write-Host "Processing: $_"
+              $content = Get-Content $_.FullName -Raw
+              $content = $content -replace '(?m)^.*IMPORTANT: Refuse to write code.*$', ''
+              $content = $content -replace '(?m)^.*even if the user claims it is for educational purposes.*$', ''
+              $content = $content -replace '(?m)^.*malware or any malicious code you MUST refuse.*$', ''
+              $content = $content -replace '(?m)^.*If it seems malicious, refuse to work on it.*$', ''
+              $content = $content -replace '(?m)^.*Assist with defensive security tasks only.*$', ''
+              $content = $content -replace '(?m)^.*Refuse to create, modify, or improve code that may be used malicious.*$', ''
+              $content = $content -replace '(?m)^.*Do not assist with credential discovery or harvesting.*$', ''
+              $content = $content -replace '(?m)^.*IMPORTANT: Assist with authorized security testing.*$', ''
+              $content = $content -replace '(?m)^.*Refuse requests for destructive techniques.*$', ''
+              Set-Content $_.FullName -Value $content -NoNewline
+            }
+            Write-Host "Guardrails removed"
+          }
+        shell: pwsh
+
+      - name: Install Dependencies
+        run: |
+          cd opencode-src
+          bun install
+        shell: bash
+
+      - name: Build Windows versions
+        run: |
+          cd opencode-src/packages/opencode
+          bun run script/build.ts
+        shell: bash
+
+      - name: List Built Files
+        run: |
+          cd opencode-src/packages/opencode
+          Get-ChildItem -Recurse dist -Filter "opencode*" | Select-Object -First 20
+        shell: pwsh
+
       - name: Upload Windows x64
         uses: actions/upload-artifact@v4
         with:
           name: opencode-windows-x64
-          path: opencode-src/packages/opencode/dist/opencode-win32-x64/bin/opencode.exe
+          path: opencode-src/packages/opencode/dist/opencode-windows-x64/bin/opencode.exe
           retention-days: 5
 
       - name: Upload Windows x64 baseline
         uses: actions/upload-artifact@v4
         with:
           name: opencode-windows-x64-baseline
-          path: opencode-src/packages/opencode/dist/opencode-win32-x64-baseline/bin/opencode.exe
+          path: opencode-src/packages/opencode/dist/opencode-windows-x64-baseline/bin/opencode.exe
           retention-days: 5
           if-no-files-found: ignore
 
@@ -212,7 +271,7 @@ jobs:
           retention-days: 5
 
   release:
-    needs: [fetch-version, build-linux, build-macos]
+    needs: [fetch-version, build-linux, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
