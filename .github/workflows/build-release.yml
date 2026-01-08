@@ -145,7 +145,7 @@ jobs:
 
       - name: Clone OpenCode
         run: |
-          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/sst/opencode.git opencode-src
+          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/anomalyco/opencode.git opencode-src
         shell: bash
 
       - name: Setup Bun
@@ -361,7 +361,7 @@ jobs:
           body: |
             ## OpenCode Unguarded Release
 
-            Based on [sst/opencode](https://github.com/sst/opencode) version `${{ needs.fetch-version.outputs.version }}`
+            Based on [anomalyco/opencode](https://github.com/anomalyco/opencode) version `${{ needs.fetch-version.outputs.version }}`
 
             ### Changes from Upstream
             - Removed LLM guardrails/ethics fences from system prompts
