@@ -359,6 +359,14 @@ jobs:
           workspaces: opencode-src/packages/desktop/src-tauri
           shared-key: ${{ matrix.target }}
 
+      # Fixes AppImage build issues on Linux
+      - name: Install tauri-cli from portable appimage branch
+        if: contains(matrix.os, 'ubuntu')
+        run: |
+          cargo install tauri-cli --git https://github.com/tauri-apps/tauri --branch feat/truly-portable-appimage --force
+          echo "Installed tauri-cli version:"
+          cargo tauri --version
+
       - name: Install dependencies
         run: |
           cd opencode-src
@@ -425,6 +433,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: opencode-src/packages/desktop
+          tauriScript: ${{ contains(matrix.os, 'ubuntu') && 'cargo tauri' || '' }}
           args: --target ${{ matrix.target }} --config src-tauri/tauri.prod.conf.json
 
       - name: Upload Desktop artifacts (macOS)
