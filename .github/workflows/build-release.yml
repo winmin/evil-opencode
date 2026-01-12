@@ -390,6 +390,35 @@ jobs:
           fi
         shell: bash
 
+      - name: Disable updater in prod config (no signing key)
+        run: |
+          cd opencode-src/packages/desktop
+          # Create a modified prod config without updater
+          cat > src-tauri/tauri.prod.conf.json << 'EOF'
+          {
+            "$schema": "https://schema.tauri.app/config/2",
+            "productName": "OpenCode",
+            "identifier": "ai.opencode.desktop.unguarded",
+            "bundle": {
+              "createUpdaterArtifacts": false,
+              "icon": [
+                "icons/prod/32x32.png",
+                "icons/prod/128x128.png",
+                "icons/prod/128x128@2x.png",
+                "icons/prod/icon.icns",
+                "icons/prod/icon.ico"
+              ],
+              "windows": {
+                "nsis": {
+                  "installerIcon": "icons/prod/icon.ico"
+                }
+              }
+            }
+          }
+          EOF
+          cat src-tauri/tauri.prod.conf.json
+        shell: bash
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
