@@ -118,6 +118,9 @@ jobs:
         run: |
           cd opencode-src/packages/opencode
           bun run script/build.ts
+        env:
+          OPENCODE_VERSION: ${{ needs.fetch-version.outputs.version }}
+          OPENCODE_CHANNEL: latest
 
       - name: List Built Files
         run: |
@@ -225,6 +228,9 @@ jobs:
           cd opencode-src/packages/opencode
           bun run script/build.ts --single
         shell: bash
+        env:
+          OPENCODE_VERSION: ${{ needs.fetch-version.outputs.version }}
+          OPENCODE_CHANNEL: latest
 
       - name: List Built Files
         run: |
@@ -316,6 +322,9 @@ jobs:
         run: |
           cd opencode-src/packages/opencode
           bun run script/build.ts
+        env:
+          OPENCODE_VERSION: ${{ needs.fetch-version.outputs.version }}
+          OPENCODE_CHANNEL: latest
 
       - name: List Built Files
         run: |
