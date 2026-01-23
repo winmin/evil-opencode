@@ -544,13 +544,17 @@ jobs:
         run: |
           mkdir -p release
 
+          # Show what was downloaded
+          echo "Downloaded artifacts:"
+          find artifacts -type f | head -50
+
           # Rename and organize CLI files
           for dir in artifacts/*/; do
             dirname=$(basename "$dir")
+
+            # Handle CLI artifacts (files directly in directory)
             for file in "$dir"*; do
               if [ -f "$file" ]; then
-                filename=$(basename "$file")
-                # Determine output filename
                 case "$dirname" in
                   opencode-linux-x64)
                     cp "$file" "release/opencode-linux-x64"
@@ -576,16 +580,52 @@ jobs:
                   opencode-windows-x64-baseline)
                     cp "$file" "release/opencode-windows-x64-baseline.exe"
                     ;;
-                  # Desktop artifacts
-                  opencode-desktop-*)
-                    cp "$file" "release/$filename"
-                    ;;
                 esac
               fi
             done
+
+            # Handle Desktop artifacts (files in nested directories)
+            if [[ "$dirname" == opencode-desktop-* ]]; then
+              # Find and copy DMG files (macOS)
+              find "$dir" -name "*.dmg" -type f | while read -r file; do
+                filename=$(basename "$file")
+                echo "Copying DMG: $filename"
+                cp "$file" "release/$filename"
+              done
+
+              # Find and copy MSI files (Windows)
+              find "$dir" -name "*.msi" -type f | while read -r file; do
+                filename=$(basename "$file")
+                echo "Copying MSI: $filename"
+                cp "$file" "release/$filename"
+              done
+
+              # Find and copy NSIS exe files (Windows installer)
+              find "$dir" -path "*/nsis/*.exe" -type f | while read -r file; do
+                filename=$(basename "$file")
+                echo "Copying NSIS EXE: $filename"
+                cp "$file" "release/$filename"
+              done
+
+              # Find and copy AppImage files (Linux)
+              find "$dir" -name "*.AppImage" -type f | while read -r file; do
+                filename=$(basename "$file")
+                echo "Copying AppImage: $filename"
+                cp "$file" "release/$filename"
+              done
+
+              # Find and copy deb files (Linux)
+              find "$dir" -name "*.deb" -type f | while read -r file; do
+                filename=$(basename "$file")
+                echo "Copying DEB: $filename"
+                cp "$file" "release/$filename"
+              done
+            fi
           done
 
           chmod +x release/opencode-* 2>/dev/null || true
+          echo ""
+          echo "Final release files:"
           ls -la release/
 
       - name: Generate Checksums
