@@ -90,6 +90,25 @@ jobs:
             echo "Guardrails removed and unrestricted prompt added"
           fi
 
+      - name: Patch upgrade to use evil-opencode releases
+        run: |
+          cd opencode-src
+          INSTALL_FILE="packages/opencode/src/installation/index.ts"
+          if [ -f "$INSTALL_FILE" ]; then
+            echo "Patching $INSTALL_FILE for evil-opencode updates..."
+
+            # Change GitHub API URL for latest version check
+            sed -i 's|api.github.com/repos/anomalyco/opencode/releases/latest|api.github.com/repos/${{ github.repository }}/releases/latest|g' "$INSTALL_FILE"
+
+            # Change curl install script to download from our releases
+            sed -i 's|curl -fsSL https://opencode.ai/install \| bash|curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh \| bash|g' "$INSTALL_FILE"
+
+            # Handle version tag format (v1.1.7-unguarded -> 1.1.7)
+            sed -i 's|data.tag_name.replace(/^v/, "")|data.tag_name.replace(/^v/, "").replace(/-unguarded$/, "")|g' "$INSTALL_FILE"
+
+            echo "Patched installation file"
+          fi
+
       - name: Install Dependencies
         run: |
           cd opencode-src
@@ -182,6 +201,19 @@ jobs:
           }
         shell: pwsh
 
+      - name: Patch upgrade to use evil-opencode releases
+        run: |
+          cd opencode-src
+          INSTALL_FILE="packages/opencode/src/installation/index.ts"
+          if [ -f "$INSTALL_FILE" ]; then
+            echo "Patching $INSTALL_FILE for evil-opencode updates..."
+            sed -i 's|api.github.com/repos/anomalyco/opencode/releases/latest|api.github.com/repos/${{ github.repository }}/releases/latest|g' "$INSTALL_FILE"
+            sed -i 's|curl -fsSL https://opencode.ai/install \| bash|curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh \| bash|g' "$INSTALL_FILE"
+            sed -i 's|data.tag_name.replace(/^v/, "")|data.tag_name.replace(/^v/, "").replace(/-unguarded$/, "")|g' "$INSTALL_FILE"
+            echo "Patched installation file"
+          fi
+        shell: bash
+
       - name: Install Dependencies
         run: |
           cd opencode-src
@@ -261,6 +293,18 @@ jobs:
               fi
             done
             echo "Guardrails removed and unrestricted prompt added"
+          fi
+
+      - name: Patch upgrade to use evil-opencode releases
+        run: |
+          cd opencode-src
+          INSTALL_FILE="packages/opencode/src/installation/index.ts"
+          if [ -f "$INSTALL_FILE" ]; then
+            echo "Patching $INSTALL_FILE for evil-opencode updates..."
+            sed -i '' 's|api.github.com/repos/anomalyco/opencode/releases/latest|api.github.com/repos/${{ github.repository }}/releases/latest|g' "$INSTALL_FILE"
+            sed -i '' 's|curl -fsSL https://opencode.ai/install \| bash|curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh \| bash|g' "$INSTALL_FILE"
+            sed -i '' 's|data.tag_name.replace(/^v/, "")|data.tag_name.replace(/^v/, "").replace(/-unguarded$/, "")|g' "$INSTALL_FILE"
+            echo "Patched installation file"
           fi
 
       - name: Install Dependencies
