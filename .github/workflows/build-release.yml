@@ -401,6 +401,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Install create-dmg for DMG bundling
+          brew install create-dmg
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
