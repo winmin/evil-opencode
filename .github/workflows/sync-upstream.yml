@@ -2,8 +2,8 @@ name: Sync Upstream Release
 
 on:
   schedule:
-    # 每12小时检查一次上游 release (UTC 0点和12点)
-    - cron: "0 0,12 * * *"
+    # 每8小时检查一次上游 release (UTC 0点、8点、16点)
+    - cron: "0 0,8,16 * * *"
   workflow_dispatch:
     inputs:
       force_sync:
