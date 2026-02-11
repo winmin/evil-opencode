@@ -321,7 +321,7 @@ jobs:
       - name: Build macOS versions
         run: |
           cd opencode-src/packages/opencode
-          bun run script/build.ts
+          bun run script/build.ts --single
         env:
           OPENCODE_VERSION: ${{ needs.fetch-version.outputs.version }}
           OPENCODE_CHANNEL: latest
