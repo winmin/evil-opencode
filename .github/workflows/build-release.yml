@@ -257,6 +257,7 @@ jobs:
   build-macos:
     needs: fetch-version
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout this repo
         uses: actions/checkout@v4
@@ -321,7 +322,7 @@ jobs:
       - name: Build macOS versions
         run: |
           cd opencode-src/packages/opencode
-          bun run script/build.ts --single
+          bun run script/build.ts
         env:
           OPENCODE_VERSION: ${{ needs.fetch-version.outputs.version }}
           OPENCODE_CHANNEL: latest
