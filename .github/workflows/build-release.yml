@@ -532,7 +532,7 @@ jobs:
 
   release:
     needs: [fetch-version, build-linux, build-macos, build-windows, build-desktop]
-    if: always() && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' && needs.build-macos-x64.result == 'success' && needs.build-windows.result == 'success'
+    if: always() && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
