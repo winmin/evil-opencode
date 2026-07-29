@@ -403,14 +403,190 @@ jobs:
           path: opencode-src/packages/opencode/dist/opencode-darwin-arm64/bin/opencode
           retention-days: 5
 
+  # Build the current upstream Electron desktop application. This intentionally
+  # replaces the obsolete Tauri pipeline; every matrix entry is required.
+  build-desktop:
+    needs: fetch-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            platform_flag: --mac --arm64
+            bun_install_flags: --os=darwin --cpu=arm64
+            artifact: opencode-desktop-darwin-arm64
+            required_files: latest-mac.yml *.dmg *.zip
+          - name: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            platform_flag: --mac --x64
+            bun_install_flags: --os=darwin --cpu=x64
+            artifact: opencode-desktop-darwin-x64
+            required_files: latest-mac.yml *.dmg *.zip
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform_flag: --win --x64
+            bun_install_flags: --os=win32 --cpu=x64
+            artifact: opencode-desktop-windows-x64
+            required_files: latest.yml *.exe *.blockmap
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform_flag: --linux --x64
+            bun_install_flags: --os=linux --cpu=x64
+            artifact: opencode-desktop-linux-x64
+            required_files: latest-linux.yml *.AppImage *.deb
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform_flag: --linux --arm64
+            bun_install_flags: --os=linux --cpu=arm64
+            artifact: opencode-desktop-linux-arm64
+            required_files: latest-linux-arm64.yml *.AppImage *.deb
+    name: desktop (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Clone OpenCode
+        run: |
+          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/anomalyco/opencode.git opencode-src
+        shell: bash
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Strip telemetry and prepare unsigned Electron packaging
+        run: |
+          bun script/strip-opencode-telemetry.ts opencode-src
+          bun script/write-opencode-electron-release-config.ts opencode-src "${{ github.repository }}"
+        shell: bash
+
+      - name: Install Electron packaging dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends rpm
+
+      - name: Install dependencies
+        run: |
+          cd opencode-src
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            bun install --linker hoisted ${{ matrix.bun_install_flags }}
+          else
+            bun install ${{ matrix.bun_install_flags }}
+          fi
+        shell: bash
+
+      - name: Type-check patched Electron desktop
+        run: bun run --cwd packages/desktop typecheck
+        working-directory: opencode-src
+        shell: bash
+
+      - name: Prepare Electron desktop
+        run: bun ./scripts/prepare.ts
+        working-directory: opencode-src/packages/desktop
+        shell: bash
+        env:
+          OPENCODE_VERSION: ${{ needs.fetch-version.outputs.version }}
+          OPENCODE_CHANNEL: prod
+          RUST_TARGET: ${{ matrix.target }}
+
+      - name: Build Electron desktop
+        run: bun run build
+        working-directory: opencode-src/packages/desktop
+        shell: bash
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+          OPENCODE_CHANNEL: prod
+
+      - name: Package unsigned Electron desktop
+        run: npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.evil.config.ts
+        working-directory: opencode-src/packages/desktop
+        shell: bash
+        timeout-minutes: 45
+        env:
+          OPENCODE_CHANNEL: prod
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Archive macOS application bundle
+        if: runner.os == 'macOS'
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+            app_dir="mac-arm64"
+            archive="opencode-desktop-mac-arm64.app.tar.gz"
+          else
+            app_dir="mac"
+            archive="opencode-desktop-mac-x64.app.tar.gz"
+          fi
+          app_path=$(find "$app_dir" -maxdepth 1 -name "*.app" -type d | head -1)
+          if [ -z "$app_path" ]; then
+            echo "::error::No macOS application bundle was produced"
+            exit 1
+          fi
+          tar -czf "$archive" -C "$(dirname "$app_path")" "$(basename "$app_path")"
+        working-directory: opencode-src/packages/desktop/dist
+        shell: bash
+
+      - name: Verify Electron packages and updater metadata
+        run: |
+          cd opencode-src/packages/desktop/dist
+          shopt -s nullglob
+          for pattern in ${{ matrix.required_files }}; do
+            matches=($pattern)
+            if [ "${#matches[@]}" -eq 0 ]; then
+              echo "::error::Missing required Electron output: $pattern"
+              exit 1
+            fi
+          done
+          find . -maxdepth 1 -type f -print | sort
+        shell: bash
+
+      - name: Upload Electron desktop artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            opencode-src/packages/desktop/dist/*.dmg
+            opencode-src/packages/desktop/dist/*.zip
+            opencode-src/packages/desktop/dist/*.blockmap
+            opencode-src/packages/desktop/dist/*.exe
+            opencode-src/packages/desktop/dist/*.AppImage
+            opencode-src/packages/desktop/dist/*.deb
+            opencode-src/packages/desktop/dist/*.rpm
+            opencode-src/packages/desktop/dist/*.app.tar.gz
+            opencode-src/packages/desktop/dist/latest*.yml
+          retention-days: 5
+          if-no-files-found: error
+
   release:
-    needs: [fetch-version, build-linux, build-macos, build-windows]
-    if: always() && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success'
+    needs: [fetch-version, build-linux, build-macos, build-windows, build-desktop]
+    if: always() && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success' && needs.build-desktop.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
+      - name: Checkout release scripts
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -462,6 +638,22 @@ jobs:
 
           done
 
+          # Keep only distributable Electron files. Updater metadata is merged
+          # below because macOS produces one latest-mac.yml per architecture.
+          for dir in artifacts/opencode-desktop-*/; do
+            [ -d "$dir" ] || continue
+            for file in "$dir"*; do
+              [ -f "$file" ] || continue
+              case "$file" in
+                *.dmg|*.zip|*.blockmap|*.exe|*.AppImage|*.deb|*.rpm|*.app.tar.gz)
+                  cp "$file" "release/$(basename "$file")"
+                  ;;
+              esac
+            done
+          done
+
+          bun script/merge-electron-updater-yml.ts artifacts release "${{ needs.fetch-version.outputs.version }}"
+
           required=(
             opencode-linux-x64
             opencode-linux-x64-baseline
@@ -470,6 +662,10 @@ jobs:
             opencode-darwin-arm64
             opencode-darwin-x64
             opencode-windows-x64.exe
+            latest.yml
+            latest-mac.yml
+            latest-linux.yml
+            latest-linux-arm64.yml
           )
           missing=0
           for file in "${required[@]}"; do
@@ -481,6 +677,13 @@ jobs:
           if [ "$missing" -ne 0 ]; then
             exit 1
           fi
+
+          for glob in "*.dmg" "*.zip" "*.exe" "*.AppImage" "*.deb"; do
+            if ! compgen -G "release/$glob" >/dev/null; then
+              echo "::error::Required Electron release file matching $glob is missing"
+              exit 1
+            fi
+          done
 
           chmod +x release/opencode-* 2>/dev/null || true
           echo ""
@@ -520,6 +723,26 @@ jobs:
             | macOS | Apple Silicon | `opencode-darwin-arm64` |
             | macOS | Intel | `opencode-darwin-x64` |
             | Windows | x64 | `opencode-windows-x64.exe` |
+
+            ### Desktop Downloads (Electron)
+
+            | Platform | Architecture | Files |
+            |----------|--------------|-------|
+            | macOS | Apple Silicon | `.dmg` / `.zip` |
+            | macOS | Intel | `.dmg` / `.zip` |
+            | Windows | x64 | `.exe` |
+            | Linux | x64 | `.AppImage` / `.deb` / `.rpm` |
+            | Linux | ARM64 | `.AppImage` / `.deb` / `.rpm` |
+
+            Desktop artifacts use the upstream Electron build flow. They are unsigned because this fork has no Apple or Windows signing credentials. The updater metadata (`latest*.yml`) is generated for this repository, not upstream OpenCode.
+
+            #### macOS: Running an unsigned app
+
+            After moving the app to `/Applications`, remove the quarantine attribute if macOS blocks it:
+
+            ```bash
+            xattr -cr /Applications/OpenCode.app
+            ```
 
             ### Quick Install (CLI)
 

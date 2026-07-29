@@ -101,7 +101,21 @@ The release fails closed unless all of these checks pass:
 
 ## Installation
 
-Current CI releases contain cross-platform CLI binaries only.
+### Desktop App (Electron)
+
+CI follows the current upstream Electron packaging flow and releases desktop artifacts for macOS, Windows, and Linux. The generated Electron updater metadata targets this repository, so a desktop installation does not switch back to upstream OpenCode for updates.
+
+| Platform                    | Files                           |
+| --------------------------- | ------------------------------- |
+| macOS Apple Silicon / Intel | `.dmg` and `.zip`               |
+| Windows x64                 | NSIS `.exe`                     |
+| Linux x64 / ARM64           | `.AppImage`, `.deb`, and `.rpm` |
+
+The desktop artifacts are unsigned because this fork has no Apple or Windows signing credentials. On macOS, after copying the app to Applications, remove quarantine if Gatekeeper blocks it:
+
+```bash
+xattr -cr /Applications/OpenCode.app
+```
 
 ### CLI Installation
 
