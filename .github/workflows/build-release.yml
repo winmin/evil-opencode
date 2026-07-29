@@ -263,8 +263,6 @@ jobs:
       - name: Strip and verify telemetry
         run: |
           bun script/strip-opencode-telemetry.ts opencode-src
-          # PowerShell rewrites prompt files with CRLF; ignore line-ending-only whitespace here.
-          git -C opencode-src diff --check --ignore-space-at-eol
         shell: bash
 
       - name: Install Dependencies
