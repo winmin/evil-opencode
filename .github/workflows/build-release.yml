@@ -3,19 +3,19 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       opencode_version:
-        description: 'OpenCode upstream version to build (e.g., 1.1.3)'
+        description: "OpenCode upstream version to build (e.g., 1.1.3)"
         required: true
-        default: 'latest'
+        default: "latest"
       release_tag:
-        description: 'Release tag name (e.g., v1.1.3-unguarded)'
+        description: "Release tag name (e.g., v1.1.3-unguarded)"
         required: true
 
 env:
-  BUN_VERSION: 'latest'
+  BUN_VERSION: "latest"
 
 jobs:
   fetch-version:
@@ -403,195 +403,8 @@ jobs:
           path: opencode-src/packages/opencode/dist/opencode-darwin-arm64/bin/opencode
           retention-days: 5
 
-  # Build Desktop (Tauri) versions
-  build-desktop:
-    needs: [fetch-version, build-linux, build-macos, build-windows]
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            cli-artifact: opencode-darwin-arm64
-            desktop-name: opencode-desktop-darwin-arm64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            cli-artifact: opencode-darwin-x64
-            desktop-name: opencode-desktop-darwin-x64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            cli-artifact: opencode-windows-x64
-            desktop-name: opencode-desktop-windows-x64
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            cli-artifact: opencode-linux-x64
-            desktop-name: opencode-desktop-linux-x64
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            cli-artifact: opencode-linux-arm64
-            desktop-name: opencode-desktop-linux-arm64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Checkout this repo
-        uses: actions/checkout@v4
-
-      - name: Clone OpenCode
-        run: |
-          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/anomalyco/opencode.git opencode-src
-        shell: bash
-
-      - name: Download CLI artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ matrix.cli-artifact }}
-          path: cli-binary
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Strip and verify telemetry
-        run: |
-          bun script/strip-opencode-telemetry.ts opencode-src
-          git -C opencode-src diff --check
-        shell: bash
-
-      - name: Install dependencies (Ubuntu)
-        if: contains(matrix.os, 'ubuntu')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          # Install create-dmg for DMG bundling
-          brew install create-dmg
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: opencode-src/packages/desktop/src-tauri
-          shared-key: ${{ matrix.target }}
-
-      # Fixes AppImage build issues on Linux
-      - name: Install tauri-cli from portable appimage branch
-        if: contains(matrix.os, 'ubuntu')
-        run: |
-          cargo install tauri-cli --git https://github.com/tauri-apps/tauri --branch feat/truly-portable-appimage --force
-          echo "Installed tauri-cli version:"
-          cargo tauri --version
-
-      - name: Install dependencies
-        run: |
-          cd opencode-src
-          bun install
-        shell: bash
-
-      - name: Prepare sidecar binary
-        run: |
-          cd opencode-src/packages/desktop
-          mkdir -p src-tauri/sidecars
-          if [ "${{ runner.os }}" == "Windows" ]; then
-            cp ../../../cli-binary/opencode.exe "src-tauri/sidecars/opencode-cli-${{ matrix.target }}.exe"
-          else
-            cp ../../../cli-binary/opencode "src-tauri/sidecars/opencode-cli-${{ matrix.target }}"
-            chmod +x "src-tauri/sidecars/opencode-cli-${{ matrix.target }}"
-          fi
-          ls -la src-tauri/sidecars/
-        shell: bash
-
-      - name: Update Tauri config version
-        run: |
-          cd opencode-src/packages/desktop
-          VERSION="${{ needs.fetch-version.outputs.version }}"
-          if [ "${{ runner.os }}" == "Windows" ]; then
-            sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
-          else
-            sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json 2>/dev/null || \
-            sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
-          fi
-        shell: bash
-
-      - name: Disable updater in prod config (no signing key)
-        run: |
-          cd opencode-src/packages/desktop
-          # Create a modified prod config without updater
-          cat > src-tauri/tauri.prod.conf.json << 'EOF'
-          {
-            "$schema": "https://schema.tauri.app/config/2",
-            "productName": "OpenCode",
-            "identifier": "ai.opencode.desktop.unguarded",
-            "bundle": {
-              "createUpdaterArtifacts": false,
-              "icon": [
-                "icons/prod/32x32.png",
-                "icons/prod/128x128.png",
-                "icons/prod/128x128@2x.png",
-                "icons/prod/icon.icns",
-                "icons/prod/icon.ico"
-              ],
-              "windows": {
-                "nsis": {
-                  "installerIcon": "icons/prod/icon.ico"
-                }
-              }
-            }
-          }
-          EOF
-          cat src-tauri/tauri.prod.conf.json
-        shell: bash
-
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: opencode-src/packages/desktop
-          tauriScript: ${{ contains(matrix.os, 'ubuntu') && 'cargo tauri' || '' }}
-          args: --target ${{ matrix.target }} --config src-tauri/tauri.prod.conf.json
-
-      - name: Upload Desktop artifacts (macOS)
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.desktop-name }}
-          path: |
-            opencode-src/packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-          retention-days: 5
-          if-no-files-found: ignore
-
-      - name: Upload Desktop artifacts (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.desktop-name }}
-          path: |
-            opencode-src/packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
-            opencode-src/packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
-          retention-days: 5
-          if-no-files-found: ignore
-
-      - name: Upload Desktop artifacts (Linux)
-        if: contains(matrix.os, 'ubuntu')
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.desktop-name }}
-          path: |
-            opencode-src/packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            opencode-src/packages/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
-          retention-days: 5
-          if-no-files-found: ignore
-
   release:
-    needs: [fetch-version, build-linux, build-macos, build-windows, build-desktop]
+    needs: [fetch-version, build-linux, build-macos, build-windows]
     if: always() && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success'
     runs-on: ubuntu-latest
     permissions:
@@ -647,44 +460,27 @@ jobs:
               fi
             done
 
-            # Handle Desktop artifacts (files in nested directories)
-            if [[ "$dirname" == opencode-desktop-* ]]; then
-              # Find and copy DMG files (macOS)
-              find "$dir" -name "*.dmg" -type f | while read -r file; do
-                filename=$(basename "$file")
-                echo "Copying DMG: $filename"
-                cp "$file" "release/$filename"
-              done
+          done
 
-              # Find and copy MSI files (Windows)
-              find "$dir" -name "*.msi" -type f | while read -r file; do
-                filename=$(basename "$file")
-                echo "Copying MSI: $filename"
-                cp "$file" "release/$filename"
-              done
-
-              # Find and copy NSIS exe files (Windows installer)
-              find "$dir" -path "*/nsis/*.exe" -type f | while read -r file; do
-                filename=$(basename "$file")
-                echo "Copying NSIS EXE: $filename"
-                cp "$file" "release/$filename"
-              done
-
-              # Find and copy AppImage files (Linux)
-              find "$dir" -name "*.AppImage" -type f | while read -r file; do
-                filename=$(basename "$file")
-                echo "Copying AppImage: $filename"
-                cp "$file" "release/$filename"
-              done
-
-              # Find and copy deb files (Linux)
-              find "$dir" -name "*.deb" -type f | while read -r file; do
-                filename=$(basename "$file")
-                echo "Copying DEB: $filename"
-                cp "$file" "release/$filename"
-              done
+          required=(
+            opencode-linux-x64
+            opencode-linux-x64-baseline
+            opencode-linux-arm64
+            opencode-linux-arm64-musl
+            opencode-darwin-arm64
+            opencode-darwin-x64
+            opencode-windows-x64.exe
+          )
+          missing=0
+          for file in "${required[@]}"; do
+            if [ ! -s "release/$file" ]; then
+              echo "::error file=release/$file::Required CLI release artifact is missing or empty"
+              missing=1
             fi
           done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
 
           chmod +x release/opencode-* 2>/dev/null || true
           echo ""
@@ -720,36 +516,10 @@ jobs:
             | Linux | x64 | `opencode-linux-x64` |
             | Linux | x64 (baseline) | `opencode-linux-x64-baseline` |
             | Linux | ARM64 | `opencode-linux-arm64` |
+            | Linux | ARM64 (musl) | `opencode-linux-arm64-musl` |
             | macOS | Apple Silicon | `opencode-darwin-arm64` |
             | macOS | Intel | `opencode-darwin-x64` |
             | Windows | x64 | `opencode-windows-x64.exe` |
-
-            ### Desktop App Downloads
-
-            | Platform | Architecture | File |
-            |----------|--------------|------|
-            | macOS | Apple Silicon | `.dmg` |
-            | macOS | Intel | `.dmg` |
-            | Windows | x64 | `.msi` / `.exe` |
-            | Linux | x64 | `.AppImage` / `.deb` |
-            | Linux | ARM64 | `.AppImage` / `.deb` |
-
-            #### macOS: Running Unsigned App
-
-            The macOS desktop app is not code-signed. To run it:
-
-            **Method 1: Remove quarantine attribute (Recommended)**
-            ```bash
-            xattr -cr /Applications/OpenCode.app
-            ```
-
-            **Method 2: Ad-hoc signing**
-            ```bash
-            codesign --force --deep --sign - /Applications/OpenCode.app
-            ```
-
-            **Method 3: System Preferences**
-            - Try to open the app → Go to System Preferences → Security & Privacy → General → Click "Open Anyway"
 
             ### Quick Install (CLI)
 
