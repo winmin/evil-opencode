@@ -52,13 +52,17 @@ jobs:
 
       - name: Clone OpenCode
         run: |
-          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/anomalyco/opencode.git opencode-src || \
-          git clone --depth 1 https://github.com/anomalyco/opencode.git opencode-src
+          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/anomalyco/opencode.git opencode-src
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Test telemetry patcher
+        run: |
+          : > "$RUNNER_TEMP/empty-bunfig.toml"
+          bun --config="$RUNNER_TEMP/empty-bunfig.toml" test script/strip-opencode-telemetry.test.ts
 
       - name: Remove Guardrails
         run: |
@@ -109,10 +113,24 @@ jobs:
             echo "Patched installation file"
           fi
 
+      - name: Strip and verify telemetry
+        run: |
+          bun script/strip-opencode-telemetry.ts opencode-src
+          git -C opencode-src diff --check
+
       - name: Install Dependencies
         run: |
           cd opencode-src
           bun install
+
+      - name: Type-check patched runtime
+        run: |
+          for package in packages/core packages/opencode packages/app; do
+            if jq -e '.scripts.typecheck' "$package/package.json" >/dev/null 2>&1; then
+              bun run --cwd "$package" typecheck
+            fi
+          done
+        working-directory: opencode-src
 
       - name: Build Linux Platforms
         run: |
@@ -126,6 +144,22 @@ jobs:
         run: |
           cd opencode-src/packages/opencode
           find dist -type f -name "opencode*" | head -20
+
+      - name: Verify built telemetry is disabled
+        run: |
+          CLI="opencode-src/packages/opencode/dist/opencode-linux-x64/bin/opencode"
+          command -v strings >/dev/null
+          if strings "$CLI" | grep -Eq 'OTLPTraceExporter|OtlpLogger|@sentry/solid|sentry\.io/api|/v1/(logs|traces)'; then
+            echo "Telemetry signature found in the release binary"
+            exit 1
+          fi
+          bun script/verify-opencode-no-telemetry.ts "$CLI"
+
+      - name: Smoke test Linux CLI
+        run: |
+          CLI="opencode-src/packages/opencode/dist/opencode-linux-x64/bin/opencode"
+          "$CLI" --version
+          "$CLI" --help >/dev/null
 
       - name: Upload Linux x64
         uses: actions/upload-artifact@v4
@@ -226,6 +260,12 @@ jobs:
           fi
         shell: bash
 
+      - name: Strip and verify telemetry
+        run: |
+          bun script/strip-opencode-telemetry.ts opencode-src
+          git -C opencode-src diff --check
+        shell: bash
+
       - name: Install Dependencies
         run: |
           cd opencode-src
@@ -246,6 +286,12 @@ jobs:
           cd opencode-src/packages/opencode
           Get-ChildItem -Recurse dist -Filter "opencode*" | Select-Object -First 20
         shell: pwsh
+
+      - name: Smoke test Windows CLI
+        run: |
+          ./opencode-src/packages/opencode/dist/opencode-windows-x64/bin/opencode.exe --version
+          ./opencode-src/packages/opencode/dist/opencode-windows-x64/bin/opencode.exe --help > /dev/null
+        shell: bash
 
       - name: Upload Windows x64
         uses: actions/upload-artifact@v4
@@ -273,8 +319,7 @@ jobs:
 
       - name: Clone OpenCode
         run: |
-          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/anomalyco/opencode.git opencode-src || \
-          git clone --depth 1 https://github.com/anomalyco/opencode.git opencode-src
+          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/anomalyco/opencode.git opencode-src
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -323,6 +368,11 @@ jobs:
             echo "Patched installation file"
           fi
 
+      - name: Strip and verify telemetry
+        run: |
+          bun script/strip-opencode-telemetry.ts opencode-src
+          git -C opencode-src diff --check
+
       - name: Install Dependencies
         run: |
           cd opencode-src
@@ -340,6 +390,12 @@ jobs:
         run: |
           cd opencode-src/packages/opencode
           find dist -type f -name "opencode*" | head -20
+
+      - name: Smoke test macOS CLI
+        run: |
+          CLI="opencode-src/packages/opencode/dist/opencode-darwin-arm64/bin/opencode"
+          "$CLI" --version
+          "$CLI" --help >/dev/null
 
       - name: Upload macOS ARM64
         uses: actions/upload-artifact@v4
@@ -383,8 +439,7 @@ jobs:
 
       - name: Clone OpenCode
         run: |
-          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/anomalyco/opencode.git opencode-src || \
-          git clone --depth 1 https://github.com/anomalyco/opencode.git opencode-src
+          git clone --depth 1 --branch v${{ needs.fetch-version.outputs.version }} https://github.com/anomalyco/opencode.git opencode-src
         shell: bash
 
       - name: Download CLI artifact
@@ -397,6 +452,12 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Strip and verify telemetry
+        run: |
+          bun script/strip-opencode-telemetry.ts opencode-src
+          git -C opencode-src diff --check
+        shell: bash
 
       - name: Install dependencies (Ubuntu)
         if: contains(matrix.os, 'ubuntu')
@@ -651,6 +712,7 @@ jobs:
             - Removed LLM guardrails/ethics fences from system prompts
             - Removed malicious code refusal instructions
             - Removed defensive-only security restrictions
+            - Disabled OTLP/AI SDK/Sentry telemetry while preserving local logs and non-telemetry features
 
             ### CLI Downloads
 
