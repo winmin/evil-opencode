@@ -41,7 +41,7 @@ This project automatically builds OpenCode binaries with safety guardrails remov
 
 ### Guardrails Removed
 
-The following restrictions are removed from `packages/opencode/src/session/prompt/*.txt`:
+The following restrictions are removed from `packages/opencode/src/session/prompt/*.txt` on OpenCode 1.x and `packages/core/src/session/runner/prompt/*.txt` on OpenCode 2.x:
 
 | Original Guardrail                                                             | Action  |
 | ------------------------------------------------------------------------------ | ------- |
@@ -93,7 +93,7 @@ Telemetry SDK packages can remain in the upstream dependency graph for compatibi
 The release fails closed unless all of these checks pass:
 
 1. Unit tests exercise current and legacy upstream source layouts, idempotency, and negative verifier cases.
-2. The patched Core, CLI, and App packages pass upstream type checks.
+2. The patched Core, CLI, Util, and App packages pass upstream type checks.
 3. A source scan rejects active OTLP exporters/endpoints, AI SDK telemetry, and Sentry imports.
 4. The built Linux binary is scanned for telemetry signatures.
 5. The binary is started against a local fake OTLP collector; any request fails the build.
