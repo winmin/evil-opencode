@@ -37,7 +37,7 @@ jobs:
           if [ -n "${{ inputs.upstream_tag }}" ]; then
             UPSTREAM_TAG="${{ inputs.upstream_tag }}"
           else
-            UPSTREAM_TAG=$(curl -s https://api.github.com/repos/anomalyco/opencode/releases/latest | jq -r '.tag_name')
+            UPSTREAM_TAG="v$(curl --fail --silent https://registry.npmjs.org/@opencode%2Fcli/latest | jq -r '.version')"
           fi
 
           if [ "$UPSTREAM_TAG" == "null" ] || [ -z "$UPSTREAM_TAG" ]; then

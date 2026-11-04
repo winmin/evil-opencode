@@ -52,7 +52,10 @@ function relativeImport(from: string, to: string) {
 }
 
 function replaceFunctionBody(content: string, name: string, body: string) {
-  const signature = new RegExp(`export\\s+(?:async\\s+)?function\\s+${name}\\s*\\([^)]*\\)[^{]*\\{`, "m")
+  const signature = new RegExp(
+    `(?:export\\s+(?:async\\s+)?function\\s+${name}\\s*\\([^)]*\\)[^{]*|export\\s+const\\s+${name}\\s*=\\s*Effect\\.fnUntraced\\(function\\*\\s*\\([^)]*\\)\\s*)\\{`,
+    "m",
+  )
   const match = signature.exec(content)
   if (!match) throw new Error(`Unable to locate ${name}() while disabling OTLP`)
 
@@ -165,6 +168,70 @@ function disableModernOtlp(root: string, changes: Change[]) {
   )
 }
 
+function disableV2Otlp(root: string, changes: Change[]) {
+  const otlp = "packages/util/src/observability/otlp.ts"
+  if (!exists(root, otlp)) return
+
+  update(
+    root,
+    otlp,
+    "replace the OpenCode 2.x OTLP exporters with no-ops while retaining resource helpers",
+    (content) => {
+      if (content.includes(marker) && !content.includes("OTLPTraceExporter") && !content.includes("OtlpLogger")) {
+        return content
+      }
+      if (!content.includes("OTLPTraceExporter") && !content.includes("OtlpLogger")) return content
+      for (const anchor of [
+        'import { Effect, Layer, Scope } from "effect"',
+        'import { OtlpLogger } from "effect/observability"',
+        "function parseHeaders(",
+        "function resourceAttributes()",
+      ]) {
+        if (!content.includes(anchor)) {
+          throw new Error(`${otlp}: unknown OpenCode 2.x observability shape; refusing to alter unrelated code`)
+        }
+      }
+
+      let result = replaceFunctionBody(content, "loggers", "\n  return []\n")
+      result = replaceFunctionBody(result, "tracingLayer", "\n  return Layer.empty\n")
+      result = result.replace('import { Effect, Layer, Scope } from "effect"', 'import { Effect, Layer } from "effect"')
+      result = result.replace(/^import \{ OtlpLogger \} from "effect\/observability"\r?\n/m, "")
+      result = result.replace(
+        "export function loggers(options: Options | undefined, app: App)",
+        "export function loggers(_options: Options | undefined, _app: App)",
+      )
+      result = result.replace(
+        "export const tracingLayer = Effect.fnUntraced(function* (options: Options | undefined, app: App)",
+        "export const tracingLayer = Effect.fnUntraced(function* (_options: Options | undefined, _app: App)",
+      )
+
+      const parseHeadersStart = result.indexOf("function parseHeaders(")
+      const resourceStart = result.indexOf("function resourceAttributes()")
+      if (parseHeadersStart === -1 || resourceStart === -1 || parseHeadersStart > resourceStart) {
+        throw new Error(`${otlp}: resource helpers were not found; refusing to alter unrelated upstream code`)
+      }
+      result = result.slice(0, parseHeadersStart) + result.slice(resourceStart)
+      result = result.replace(
+        "function resourceAttributes()",
+        `// ${marker}. Resource construction remains for API/test compatibility,\n` +
+          "// but no logger or trace exporter can be created by release binaries.\n" +
+          "function resourceAttributes()",
+      )
+
+      for (const value of ["OTLPTraceExporter", "OtlpLogger", "/v1/traces", "/v1/logs"]) {
+        if (result.includes(value)) throw new Error(`${otlp}: failed to remove exporter capability (${value})`)
+      }
+      return result
+    },
+    changes,
+  )
+
+  const observability = "packages/util/src/observability.ts"
+  if (!exists(root, observability) || !read(root, observability).includes("Logging.loggers(")) {
+    throw new Error(`${observability}: local logging layer was not found; refusing to strip observability`)
+  }
+}
+
 function disableLegacyOtlp(root: string, changes: Change[]) {
   const file = "packages/opencode/src/effect/observability.ts"
   if (!exists(root, file)) return
@@ -201,7 +268,7 @@ export namespace Observability {
 function disableSentry(root: string, changes: Change[]) {
   const appSources = files(root, "packages/app/src")
   const desktopSources = files(root, "packages/desktop/src")
-  const sentrySolidImport = /from\s+["']@sentry\/solid["']/
+  const sentrySolidImport = /(?:from\s+|import\s*\()\s*["']@sentry\/solid["']/
   const appUsesSentry = appSources.some((file) => sentrySolidImport.test(read(root, file)))
   const desktopUsesSentry = desktopSources.some((file) => sentrySolidImport.test(read(root, file)))
 
@@ -231,7 +298,7 @@ export function captureException(_error: unknown) {
         "route browser error reporting to the no-op shim",
         (content) =>
           content
-            .replace(/from\s+["']@sentry\/solid["']/g, 'from "@/sentry-disabled"')
+            .replace(/(["'])@sentry\/solid\1/g, '"@/sentry-disabled"')
             .replaceAll("when={Sentry.isEnabled}", "when={Sentry.isEnabled()}"),
         changes,
       )
@@ -263,7 +330,7 @@ export function captureException(_error: unknown) {
         root,
         file,
         "route desktop error reporting to the no-op shim",
-        (content) => content.replace(/from\s+["']@sentry\/solid["']/g, `from "${specifier}"`),
+        (content) => content.replace(/(["'])@sentry\/solid\1/g, JSON.stringify(specifier)),
         changes,
       )
     }
@@ -288,7 +355,9 @@ export function verifyTelemetryDisabled(root: string) {
   const errors: string[] = []
   const runtimeFiles = [
     ...files(root, "packages/opencode/src"),
+    ...files(root, "packages/cli/src"),
     ...files(root, "packages/core/src"),
+    ...files(root, "packages/util/src"),
     ...files(root, "packages/app/src"),
     ...files(root, "packages/desktop/src"),
   ]
@@ -349,17 +418,21 @@ export function verifyTelemetryDisabled(root: string) {
     }
   }
 
-  const otlp = "packages/core/src/observability/otlp.ts"
-  if (exists(root, otlp)) {
+  for (const [otlp, observability] of [
+    ["packages/core/src/observability/otlp.ts", "packages/core/src/observability.ts"],
+    ["packages/util/src/observability/otlp.ts", "packages/util/src/observability.ts"],
+  ]) {
+    if (!exists(root, otlp)) continue
     const content = read(root, otlp)
-    if (!/export function loggers\(\)\s*\{\s*return \[\]\s*\}/.test(content)) {
+    if (!/export function loggers\([^)]*\)\s*\{\s*return \[\]\s*\}/.test(content)) {
       errors.push(`${otlp}: loggers() is not a verified no-op`)
     }
-    if (!/export async function tracingLayer\(\)\s*\{\s*return Layer\.empty\s*\}/.test(content)) {
+    const tracingPattern =
+      /(?:export\s+async\s+function\s+tracingLayer\s*\([^)]*\)|export\s+const\s+tracingLayer\s*=\s*Effect\.fnUntraced\s*\(\s*function\*\s*\([^)]*\))\s*\{\s*return Layer\.empty\s*\}/
+    if (!tracingPattern.test(content)) {
       errors.push(`${otlp}: tracingLayer() is not a verified no-op`)
     }
-    const observability = "packages/core/src/observability.ts"
-    if (!exists(root, observability) || !read(root, observability).includes("Logging.loggers()")) {
+    if (!exists(root, observability) || !read(root, observability).includes("Logging.loggers(")) {
       errors.push(`${observability}: local logging is not verifiably preserved`)
     }
   }
@@ -382,7 +455,7 @@ export function verifyTelemetryDisabled(root: string) {
 
 export function stripTelemetry(root: string): StripResult {
   const target = path.resolve(root)
-  if (!exists(target, "packages/opencode/package.json")) {
+  if (!exists(target, "packages/opencode/package.json") && !exists(target, "packages/cli/package.json")) {
     throw new Error(`Not an OpenCode checkout: ${target}`)
   }
 
@@ -390,6 +463,7 @@ export function stripTelemetry(root: string): StripResult {
   const warnings: string[] = []
   disableAiSdkTelemetry(target, changes)
   disableModernOtlp(target, changes)
+  disableV2Otlp(target, changes)
   disableLegacyOtlp(target, changes)
   disableSentry(target, changes)
   return { changes, warnings }

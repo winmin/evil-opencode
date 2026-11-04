@@ -127,6 +127,54 @@ export default { plugins: [sentryVitePlugin({ authToken: "fixture" })] }
   return { root, functionalSource }
 }
 
+function v2Fixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "evil-opencode-telemetry-v2-"))
+  temporaryRoots.push(root)
+
+  const files: Record<string, string> = {
+    "packages/cli/package.json": `{"name":"@opencode/cli"}`,
+    "packages/util/src/observability/otlp.ts": `import { Effect, Layer, Scope } from "effect"
+import { OtlpLogger } from "effect/observability"
+
+function parseHeaders(value?: string) {
+  return value ? { Authorization: value } : undefined
+}
+
+function resourceAttributes() {
+  return {}
+}
+
+export function loggers(options: Options | undefined, app: App) {
+  return [OtlpLogger.make({ url: \`\${options?.endpoint}/v1/logs\`, headers: parseHeaders(options?.headers) })]
+}
+
+export const tracingLayer = Effect.fnUntraced(function* (options: Options | undefined, app: App) {
+  const { OTLPTraceExporter } = yield* Effect.promise(() => import("@opentelemetry/exporter-trace-otlp-http"))
+  return Layer.effectContext(Effect.acquireRelease(Scope.make(), () => Effect.void))
+})
+`,
+    "packages/util/src/observability.ts": `import { Logging } from "./observability/logging"
+import { Otlp } from "./observability/otlp"
+
+export const layer = Logger.layer([...Logging.loggers(false, "latest"), ...Otlp.loggers()])
+`,
+    "packages/app/src/entry.tsx": `import { init } from "@sentry/solid"
+init({ dsn: "fixture" })
+`,
+    "packages/app/src/shell/errors/error.tsx": `import type { captureException } from "@sentry/solid"
+export const report = (error: unknown) => import("@sentry/solid").then(({ captureException }) => captureException(error))
+`,
+    "packages/app/vite.config.ts": `import { sentryVitePlugin } from "@sentry/vite-plugin"
+export default { plugins: [sentryVitePlugin({ authToken: "fixture" })] }
+`,
+    "packages/desktop/src/renderer/startup/sentry.ts": `export const init = () => import("@sentry/solid").then(({ init }) => init())
+`,
+  }
+
+  for (const [file, content] of Object.entries(files)) write(root, file, content)
+  return root
+}
+
 function legacyFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "evil-opencode-telemetry-legacy-"))
   temporaryRoots.push(root)
@@ -234,6 +282,36 @@ describe("stripTelemetry on a modern OpenCode checkout", () => {
     expect(second).toEqual({ changes: [], warnings: [] })
     expect(snapshot(root)).toEqual(once)
     expect(verifyTelemetryDisabled(root)).toEqual([])
+  })
+
+  test("disables OpenCode 2.x exporters and static or dynamic Sentry imports", () => {
+    const root = v2Fixture()
+
+    const originalErrors = verifyTelemetryDisabled(root)
+    expect(originalErrors.some((error) => error.includes("active Sentry import remains"))).toBe(true)
+    expect(originalErrors.some((error) => error.includes("OpenTelemetry exporter import"))).toBe(true)
+
+    stripTelemetry(root)
+
+    expect(verifyTelemetryDisabled(root)).toEqual([])
+    const otlp = fs.readFileSync(path.join(root, "packages/util/src/observability/otlp.ts"), "utf8")
+    expect(otlp).toContain("export function loggers(_options: Options | undefined, _app: App)")
+    expect(otlp).toContain("return []")
+    expect(otlp).toContain("return Layer.empty")
+    expect(otlp).not.toContain("parseHeaders")
+    expect(otlp).not.toContain("OTLPTraceExporter")
+    expect(otlp).not.toContain("OtlpLogger")
+    expect(fs.readFileSync(path.join(root, "packages/app/src/shell/errors/error.tsx"), "utf8")).toContain(
+      'import("@/sentry-disabled")',
+    )
+    expect(fs.readFileSync(path.join(root, "packages/desktop/src/renderer/startup/sentry.ts"), "utf8")).toContain(
+      'import("../../sentry-disabled")',
+    )
+    expect(fs.readFileSync(path.join(root, "packages/util/src/observability.ts"), "utf8")).toContain("Logging.loggers(")
+
+    const once = snapshot(root)
+    expect(stripTelemetry(root)).toEqual({ changes: [], warnings: [] })
+    expect(snapshot(root)).toEqual(once)
   })
 
   test("preserves the local logger in the known legacy observability module", () => {
